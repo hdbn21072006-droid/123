@@ -1,4 +1,3 @@
-import mysql from 'mysql2';
 import { dbPool } from '../config/database';
 
 // ──────────────────────────────────────────────
@@ -485,35 +484,42 @@ async function migrate() {
 				id VARCHAR(50) PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
 				short_name VARCHAR(50) NOT NULL,
-				description TEXT NULL,
-				website VARCHAR(255) NULL,
-				hotline VARCHAR(50) NULL,
-				address TEXT NULL,
+				description TEXT,
+				website VARCHAR(255),
+				hotline VARCHAR(50),
+				address TEXT,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+			)
 		`);
 
 		// Seed schools
 		for (const school of schools) {
 			await dbPool.query(
-				`INSERT IGNORE INTO schools (id, name, short_name, description, website, hotline, address)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO schools (id, name, short_name, description, website, hotline, address)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7)
+				 ON CONFLICT (id) DO NOTHING`,
 				[school.id, school.name, school.short_name, school.description, school.website, school.hotline, school.address],
 			);
 		}
 		console.log(`Schools: ${schools.length} seeded.`);
 
 		// ── 2. Add school_id to recruitment_knowledge ──
-		await dbPool.query(`
-			ALTER TABLE recruitment_knowledge
-			ADD COLUMN IF NOT EXISTS school_id VARCHAR(50) NULL,
-			ADD INDEX idx_recruitment_knowledge_school (school_id)
-		`).catch(() => console.log('  school_id column may already exist or ALTER failed (MySQL version).'));
+		try {
+			await dbPool.query(`
+				ALTER TABLE recruitment_knowledge
+				ADD COLUMN IF NOT EXISTS school_id VARCHAR(50)
+			`);
+			await dbPool.query(`
+				CREATE INDEX IF NOT EXISTS idx_recruitment_knowledge_school ON recruitment_knowledge(school_id)
+			`);
+		} catch (e) {
+			console.log('  school_id column may already exist');
+		}
 
 		// Update existing PTIT entries (those without school_id)
 		await dbPool.query(
 			`UPDATE recruitment_knowledge SET school_id = 'ptit' WHERE school_id IS NULL AND (
-				content LIKE '%PTIT%' OR content LIKE '%Bưu chính%' OR content LIKE '%Viễn thông%'
+				content ILIKE '%PTIT%' OR content ILIKE '%Bưu chính%' OR content ILIKE '%Viễn thông%'
 			)`,
 		);
 
@@ -522,11 +528,11 @@ async function migrate() {
 
 		let inserted = 0;
 		for (const entry of knowledgeEntries) {
-			const [existing] = await dbPool.query<mysql.RowDataPacket[]>(
-				'SELECT id FROM recruitment_knowledge WHERE content = ? AND school_id = ?',
+			const existing = await dbPool.query(
+				'SELECT id FROM recruitment_knowledge WHERE content = $1 AND school_id = $2',
 				[entry.content, entry.school_id],
 			);
-			if (existing.length > 0) continue;
+			if (existing.rows.length > 0) continue;
 
 			let embedding: number[];
 			if (USE_REAL_EMBEDDING) {
@@ -544,18 +550,18 @@ async function migrate() {
 			}
 
 			await dbPool.query(
-				'INSERT INTO recruitment_knowledge (school_id, content, embedding, source_file) VALUES (?, ?, ?, ?)',
+				'INSERT INTO recruitment_knowledge (school_id, content, embedding, source_file) VALUES ($1, $2, $3, $4)',
 				[entry.school_id, entry.content, JSON.stringify(embedding), entry.source],
 			);
 			inserted += 1;
 		}
 
 		// ── 4. Verify ──
-		const [count] = await dbPool.query<mysql.RowDataPacket[]>(
+		const count = await dbPool.query(
 			'SELECT school_id, COUNT(*) as total FROM recruitment_knowledge WHERE school_id IS NOT NULL GROUP BY school_id',
 		);
-		const total = (count as Array<{ school_id: string; total: number }>).reduce((s, r) => s + r.total, 0);
-		console.log(`\nKnowledge base: ${total} entries across ${(count as Array<{ school_id: string; total: number }>).length} schools.`);
+		const total = count.rows.reduce((s: number, r: any) => s + parseInt(r.total), 0);
+		console.log(`\nKnowledge base: ${total} entries across ${count.rows.length} schools.`);
 		if (USE_REAL_EMBEDDING) {
 			console.log(`New entries inserted this run: ${inserted}`);
 		}
