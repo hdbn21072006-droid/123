@@ -2,9 +2,11 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-COPY . .
+COPY package*.json ./
 
-RUN npm ci
+RUN npm install
+
+COPY . .
 
 RUN npx tsc -p tsconfig.backend.json
 
