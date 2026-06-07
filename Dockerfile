@@ -1,14 +1,39 @@
+# Build stage
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY backend-package.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Build backend
+RUN npx tsc -p tsconfig.backend.json
+
+# Production stage
 FROM node:18-alpine
 
 WORKDIR /app
 
+# Copy package files
 COPY package*.json ./
+COPY backend-package.json ./
 
-RUN npm install
+# Install production dependencies only
+RUN npm install --production
 
-COPY . .
+# Copy built files from builder
+COPY --from=builder /app/dist-backend ./dist-backend
+COPY --from=builder /app/src/backend ./src/backend
 
-RUN npx tsc -p tsconfig.backend.json
+# Create uploads directory
+RUN mkdir -p src/backend/uploads
 
 EXPOSE 8080
 
